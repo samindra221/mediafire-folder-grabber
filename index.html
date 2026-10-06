@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MediaFire Folder Grabber</title>
+<style>
+  :root { --bg:#0f1115; --card:#181b22; --line:#2a2f3a; --text:#e8eaf0; --muted:#8b92a5; --accent:#4f8cff; --ok:#3ecf8e; --err:#ff6b6b; }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f5f6f8; --card:#fff; --line:#dfe2e8; --text:#1b1e26; --muted:#6a7183; --accent:#2563eb; --ok:#16a06a; --err:#d63c3c; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  main { max-width:760px; margin:0 auto; padding:32px 16px 64px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  p.sub { color:var(--muted); margin:0 0 20px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:16px; }
+  .row { display:flex; gap:8px; }
+  input[type=text] { flex:1; min-width:0; padding:10px 12px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--text); font:inherit; }
+  button { padding:10px 16px; border-radius:8px; border:0; background:var(--accent); color:#fff; font:inherit; font-weight:600; cursor:pointer; }
+  button.secondary { background:transparent; color:var(--text); border:1px solid var(--line); font-weight:500; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  #status { color:var(--muted); margin-top:10px; min-height:1.4em; }
+  #status.err { color:var(--err); }
+  .bar { height:6px; background:var(--line); border-radius:3px; overflow:hidden; margin-top:10px; display:none; }
+  .bar > div { height:100%; width:0; background:var(--ok); transition:width .2s; }
+  .head { display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+  .head h2 { font-size:16px; margin:0; }
+  ul { list-style:none; margin:0; padding:0; max-height:420px; overflow:auto; border-top:1px solid var(--line); }
+  li { display:flex; align-items:center; gap:10px; padding:8px 4px; border-bottom:1px solid var(--line); }
+  li .name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  li .size { color:var(--muted); font-size:13px; white-space:nowrap; }
+  li .state { width:18px; text-align:center; }
+  .note { color:var(--muted); font-size:13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>MediaFire Folder Grabber</h1>
+  <p class="sub">Paste a public MediaFire folder link, then download every file in one click.</p>
+
+  <div class="card">
+    <div class="row">
+      <input id="url" type="text" placeholder="https://www.mediafire.com/folder/xxxxxxxxxxxxx/FolderName" autocomplete="off">
+      <button id="load">Load files</button>
+    </div>
+    <div id="status"></div>
+  </div>
+
+  <div class="card" id="results" hidden>
+    <div class="head">
+      <h2 id="title"></h2>
+      <div>
+        <button class="secondary" id="toggle">Select none</button>
+        <button id="dlall">Download all</button>
+      </div>
+    </div>
+    <div class="row" style="margin-bottom:10px">
+      <label style="display:flex;align-items:center;gap:6px;white-space:nowrap">
+        <input type="checkbox" id="direct" checked> Save directly (no prompts) to:
+      </label>
+      <input id="dest" type="text" placeholder="Folder path">
+    </div>
+    <ul id="list"></ul>
+    <div class="bar" id="bar"><div></div></div>
+    <p class="note">Files download one after another. If your browser asks to allow multiple downloads, choose Allow.</p>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+let files = [];
+
+const fmt = n => {
+  if (!n) return '';
+  const u = ['B','KB','MB','GB','TB']; let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return n.toFixed(i ? 1 : 0) + ' ' + u[i];
+};
+const setStatus = (t, err) => { $('status').textContent = t; $('status').className = err ? 'err' : ''; };
+
+$('load').onclick = async () => {
+  const url = $('url').value.trim();
+  if (!url) return setStatus('Paste a folder link first.', true);
+  $('load').disabled = true; $('results').hidden = true;
+  setStatus('Reading folder…');
+  try {
+    const r = await fetch('/api/list?url=' + encodeURIComponent(url));
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Request failed');
+    files = j.files.filter(f => f.link);
+    $('title').textContent = `${j.name} — ${files.length} file${files.length === 1 ? '' : 's'}`;
+    $('list').innerHTML = '';
+    files.forEach((f, i) => {
+      const li = document.createElement('li');
+      li.innerHTML = `<input type="checkbox" checked data-i="${i}"><span class="name" title=""></span><span class="size">${fmt(f.size)}</span><span class="state" id="s${i}"></span>`;
+      li.querySelector('.name').textContent = f.path;
+      li.querySelector('.name').title = f.path;
+      $('list').appendChild(li);
+    });
+    $('results').hidden = false;
+    setStatus(files.length ? '' : 'No downloadable files found in that folder.', !files.length);
+  } catch (e) { setStatus(e.message, true); }
+  $('load').disabled = false;
+};
+
+$('toggle').onclick = () => {
+  const boxes = [...$('list').querySelectorAll('input')];
+  const any = boxes.some(b => b.checked);
+  boxes.forEach(b => b.checked = !any);
+  $('toggle').textContent = any ? 'Select all' : 'Select none';
+};
+
+$('dlall').onclick = async () => {
+  const picked = [...$('list').querySelectorAll('input:checked')].map(b => +b.dataset.i);
+  if (!picked.length) return setStatus('Select at least one file.', true);
+  $('dlall').disabled = true; $('bar').style.display = 'block';
+  setStatus('');
+  if ($('direct').checked) {
+    let failed = 0;
+    for (let n = 0; n < picked.length; n++) {
+      const i = picked[n], f = files[i];
+      $('s' + i).textContent = '⏳';
+      setStatus(`Saving ${n + 1} of ${picked.length}: ${f.name}`);
+      try {
+        const r = await fetch('/api/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ link: f.link, name: f.name, relpath: f.path, dest: $('dest').value }),
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || 'failed');
+        $('s' + i).textContent = '✓';
+      } catch (e) {
+        failed++;
+        $('s' + i).textContent = '✗';
+        $('s' + i).title = e.message;
+      }
+      $('bar').firstElementChild.style.width = ((n + 1) / picked.length * 100) + '%';
+    }
+    setStatus(failed ? `Done with ${failed} failed (hover ✗ for the reason). Saved to ${$('dest').value}` : `All saved to ${$('dest').value}`, !!failed);
+    $('dlall').disabled = false;
+    return;
+  }
+  for (let n = 0; n < picked.length; n++) {
+    const i = picked[n], f = files[i];
+    $('s' + i).textContent = '⏳';
+    const a = document.createElement('a');
+    a.href = `/api/download?link=${encodeURIComponent(f.link)}&name=${encodeURIComponent(f.name)}`;
+    a.download = f.name;
+    document.body.appendChild(a); a.click(); a.remove();
+    $('s' + i).textContent = '✓';
+    $('bar').firstElementChild.style.width = ((n + 1) / picked.length * 100) + '%';
+    setStatus(`Started ${n + 1} of ${picked.length}`);
+    await new Promise(r => setTimeout(r, 1200));
+  }
+  setStatus('All downloads started. Check your browser downloads.');
+  $('dlall').disabled = false;
+};
+
+fetch('/api/defaultdest').then(r => r.json()).then(j => { $('dest').value = j.dest; }).catch(() => {});
+
+$('url').addEventListener('keydown', e => { if (e.key === 'Enter') $('load').click(); });
+</script>
+</body>
+</html>
